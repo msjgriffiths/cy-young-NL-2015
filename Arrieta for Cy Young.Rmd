@@ -1,0 +1,498 @@
+---
+title: "Arrieta for Cy Young"
+author: "Michael Griffiths"
+date: "November 19, 2015"
+output: 
+  html_document: 
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 12
+    keep_md: yes
+    toc: yes
+---
+
+<style type="text/css">
+  .section {overflow-x:scroll;}
+</style>
+
+This is an effort to duplicate Greg Reida's [iPython notebook on Cy Young](https://github.com/gjreda/cy-young-NL-2015/blob/master/cy-young.ipynb) in R, for kicks and giggles.
+
+To begin, let's load the Hadley-verse.
+
+```{r Load_Libraries, warning=FALSE, comment=FALSE, message=FALSE}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# For quick plot styles
+library(ggthemes)
+# Set to FiveThirtyEight default
+theme_set(theme_fivethirtyeight())
+
+# To customize output for HTML.
+library(knitr)
+library(pander)
+knit_print.data.frame = function(x, options){ pander(x) }
+knit_print.list = function(x, options){ pander(x) }
+knit_print.matrix = function(x, options){ pander(x) }
+knit_print.table = function(x, options){ pander(x) }
+
+panderOptions('table.style', "rmarkdown")
+panderOptions('table.split.table', Inf)
+panderOptions('table.split.cells', Inf)
+panderOptions('table.alignment.default', 'left')
+
+```
+
+## Load game log files
+
+First, let's load in some of the initial game files.
+
+```{r Load_Data}
+# Convert date column to an actual date object. 
+# Note that date comes in as either "Apr 11" or "Jul 12(1)"; we don't care about the brackets.
+to_date <- function(datestring){
+  date_no_brackets = gsub("\\(.+\\)", "", datestring)
+  dates <- as.Date(sprintf("%s 2015", date_no_brackets), "%b %d %Y")
+  return(dates)
+}
+
+# Convert innings to fraction.
+# See @url(https://en.wikipedia.org/wiki/Innings_pitched)
+innings_pitched <- function(ip){
+  inning = floor(ip)
+  partial_inning = ip %% 1
+  return(inning + partial_inning / .3)
+}
+
+# Load three files into one dataframe, with a new column for the filename.
+files = c("arrieta", "greinke", "kershaw")
+data = list()
+for(file in files){
+  read_csv(sprintf("data/gamelogs/%s2015.csv", file)) %>%
+    mutate(Date = to_date(Date), 
+           player = file,
+           IP = innings_pitched(IP)) ->
+    data[[file]]
+}
+data = bind_rows(data)
+head(data)
+```
+
+## Calculate conversions
+
+Now that we have the initial data loaded, let's calculate the summary statistics we want to look at on a per-player basis.
+
+```{r Calculate_Summary_Stats}
+
+addStatisticsColumns <- function(dataframe){
+  dataframe %>%
+  mutate(rollingIP = cumsum(IP),
+         IPGame = rollingIP / Rk,
+         rollingER = cumsum(ER),
+         rollingERA = rollingER / rollingIP * 9,
+         rollingSO = cumsum(SO),
+         strikeoutsPerIP = rollingSO / rollingIP,
+         `K/9` = rollingSO / rollingIP * 9,
+         strikeoutsPerBF = rollingSO / cumsum(BF),
+         hitsPerIP = cumsum(H) / rollingIP,
+         hitsPerAB = cumsum(H) / cumsum(AB),
+         rollingWHIP = (cumsum(H) + cumsum(BB)) / rollingIP,
+         # Opponents against
+         `1B` = H - `2B` - `3B` - HR,
+         AVG = cumsum(H) / cumsum(AB),
+         OBP = (cumsum(H) + cumsum(BB) + cumsum(HBP)) / (cumsum(AB) + cumsum(BB) + cumsum(HBP) + cumsum(SF)),
+         SLG = (cumsum(`1B`) + 2*cumsum(`2B`) + 3*cumsum(`3B`) + 4*cumsum(HR)) / cumsum(AB),
+         OPS = OBP / SLG,
+         # Rates
+         BABIP = (cumsum(H) - cumsum(HR)) / (cumsum(AB) + cumsum(SO) + cumsum(HR) + cumsum(SF)),
+         `HR%` = cumsum(HR) / cumsum(BF),
+         `XBH%` = (cumsum(`2B`) + cumsum(`3B`) + cumsum(HR)) / cumsum(BF),
+         `K%` = cumsum(SO) / cumsum(BF),
+         `IP%` = (cumsum(AB) - cumsum(SO) - cumsum(HR) + cumsum(SF)) / cumsum(BF),
+         `GB%` = cumsum(GB) / (cumsum(AB) - cumsum(SO) - cumsum(HR) + cumsum(SF))
+         ) %>%
+    return
+}
+
+data %>%
+  group_by(player) %>%
+  arrange(Date) %>%
+  addStatisticsColumns %>%
+  ungroup ->
+  data
+```
+
+Since we've calculated all of out statistics (and there are a lot of them!) let's move on to the fun part - **graphs**:
+
+```{r Initial_Comparison, fig.width=8, fig.height=8}
+data %>%
+  ggplot(aes(x=Date, y=`GB%`, group=player)) +
+  geom_line(aes(colour=player), size=2) +
+  ggtitle("Games Behind Percentage")
+```
+
+We can see Arrieta continually improving, finally blasting past Kershaw.
+
+## Arrieta's Second Half
+
+Not sure what we do with this, but here how you do it - 
+
+```{r}
+allstarbreak = to_date('Jul 14')
+data %>%
+  filter(player == "arrieta", Date >= allstarbreak) %>%
+  arrange(Date) %>%
+  addStatisticsColumns ->
+  arrieta2H
+```
+
+# Grid O' Stats
+
+Now let's produce some more plots!
+
+It's difficult to reproduce, exactly, the plot stlye in matplotlib. However, we can do an approximation of one of the rows very quickly:
+
+```{r FirstPlot, fig.height=4, fig.width=12}
+
+data %>%
+  gather(vars, values, rollingERA, `K/9`, AVG, OBP, SLG) %>% 
+  ggplot(aes(x=Date, group=player)) +
+  geom_line(aes(y=values, colour=player), size=2) +
+  facet_wrap(~vars, nrow=1, scales="free") 
+
+```
+
+Now let's do the same thing for more columns - 
+
+```{r SecondPlot, fig.height=4, fig.width=12}
+
+data %>%
+  gather(vars, values, `IP%`, BABIP, `XBH%`, `HR%`, `K%`) %>% 
+  ggplot(aes(x=Date, group=player)) +
+  geom_line(aes(y=values, colour=player), size=2) +
+  facet_wrap(~vars, nrow=1, scales="free") 
+
+```
+
+## Season Simulation
+
+What if we replayed the season (sampling randomly from their performances)? Can we tell who is truly the ERA winner?
+
+```{r Season_Simulation}
+calculateSeasonStats <- function(season) {
+  season %>%
+    summarise(
+      ERA = sum(ER) / sum(IP) * 9,
+      SO = sum(SO),
+      H = sum(H),
+      `2B` = sum(`2B`),
+      `3B` = sum(`3B`),
+      HR = sum(HR),
+      BB = sum(BB),
+      HBP = sum(HBP),
+      SF = sum(SF),
+      AVG = H / sum(AB),
+      OBP = (H + BB + HBP) / (sum(AB) + BB + HBP + SF),
+      SLG = (H + 2*`2B` + 3*`3B` + 4*HR) / sum(AB),
+      AB = sum(AB),
+      BF = sum(BF),
+      Pit = sum(Pit),
+      Str = sum(Str),
+      StL = sum(StL),
+      StS = sum(StS)
+    ) %>%
+    return
+}
+
+sampleSeasonWithReplacement <- function(season, runs=1000){
+  results = list()
+  for(sample_idx in 1:runs) {
+    season %>% 
+      # By default, sample is 100% of original size.
+      sample_frac(replace=T) %>%
+      calculateSeasonStats ->
+      results[[sample_idx]] 
+  }
+  df = bind_rows(results)
+  return(df)
+}
+
+```
+
+Now that we have some helper functions to sample, we can just execute against each player - 
+
+```{r Run_Simulation}
+
+data %>%
+  group_by(player) %>%
+  do(sampleSeasonWithReplacement(.)) %>%
+  ungroup -> 
+  simulation
+
+```
+
+That allows us to plot comparison histograms:
+
+```{r Plot_Simulation, message=FALSE, fig.height=6}
+simulation %>% 
+  ggplot(aes(x=ERA)) + 
+  geom_histogram() + 
+  facet_grid(player ~ .) + 
+  ggtitle("ERA by Player")
+```
+
+## Simulation Results
+
+Now let's use some of the simulation results we have. 
+
+We can take a look at the CDF, where you can see the same pattern as in the histograms but more clearly represented.
+
+```{r CDF, fig.height=5, fig.width=4}
+simulation %>%
+  ggplot(aes(x=round(ERA, 2))) +
+  stat_ecdf(aes(colour=player), size=2)
+  
+```
+
+We can also look at histograms for most of the statistics - 
+
+```{r message=F}
+simulation %>%
+  gather(vars, values, ERA, SO, AVG, OBP, SLG) %>%
+  ggplot(aes(x=round(values, 2))) +
+  geom_histogram(size=2) +
+  facet_grid(player~vars, scales="free")
+```
+
+It's also interesting to look at the CDF for much the same view.
+
+```{r fig.height=5}
+simulation %>%
+  gather(vars, values, ERA, SO, AVG, OBP, SLG) %>%
+  ggplot(aes(x=round(values, 1))) +
+  stat_ecdf(aes(colour=player), size=2) +
+  facet_wrap(~vars, scales="free", nrow=1)
+```
+
+# Pitch f/x
+
+## Load Pitch Data
+
+Now let's take a look at pitching data.
+
+```{r Load_Pitch_Data, message=FALSE, warning=FALSE}
+files = c("arrieta", "greinke", "kershaw")
+pitch_data = list()
+for(file in files){
+  read_csv(sprintf("data/pitchfx/%s.csv", file)) %>%
+    mutate(player = file) ->
+    pitch_data[[file]]
+}
+pitch_data = bind_rows(pitch_data)
+head(pitch_data, n=2)
+```
+
+## Analyze Pitch Data
+
+We can peek at pitch result - 
+
+```{r Preview_PitchResult}
+pitch_data %>% 
+  group_by(player, pitch_result) %>% 
+  summarise(value=n()) %>% 
+  spread(player, value)
+```
+
+... and at bat results.
+
+```{r Preview_AtBat}
+pitch_data %>% 
+  group_by(player, atbat_result) %>% 
+  summarise(value=n()) %>% 
+  spread(player, value)
+```
+
+We also want to add a few columns for strikes, etc.
+
+```{r PitchData_AddColumns}
+ball_vals = c('Ball', 'Ball In Dirt', 'Intent Ball', 'Hit By Pitch')
+swing_and_miss = c('Swinging Strike', 'Swinging Strike (Blocked)', 'Missed Bunt')
+hit_vals = c('Single', 'Double', 'Triple', 'Home Run')
+
+# Add lookup table for at bat results -> bases equivalency.
+at_bat_bases = data.frame(
+  atbat_result=c("Single", "Double", "Triple", "Home Run"), 
+  total_bases=1:4
+)
+  
+pitch_data %>%
+  left_join(at_bat_bases) %>%
+  mutate(is_strike = ifelse(pitch_result %in% ball_vals, 0, 1),
+         swing_and_miss = ifelse(pitch_result %in% swing_and_miss, 1, 0),
+         is_hit = ifelse(pitch_result %in% hit_vals, 1, 0)
+         ) ->
+  pitch_data
+```
+
+Now let's see who hits harder!
+
+```{r message=FALSE}
+pitch_data %>%
+  ggplot(aes(x=batted_ball_velocity)) +
+  geom_histogram(aes(fill=player)) +
+  facet_grid(. ~ player)
+```
+
+Let's also take a look for a few summary statistics.
+
+```{r message=FALSE}
+pitch_data %>% 
+  filter(batted_ball_type != "") %>%
+  ggplot(aes(x=batted_ball_velocity)) +
+  geom_histogram() +
+  facet_grid(player ~ batted_ball_type, scales="free")
+```
+
+Now, what about their pitching speed? We can see the realized distributoin - 
+
+```{r warning=FALSE}
+pitch_data %>% 
+  filter(batted_ball_type != "") %>%
+  ggplot(aes(x=batted_ball_velocity)) +
+  geom_density(aes(fill=player, alpha=.2))
+```
+
+... but let's try to simulate the difference.
+
+```{r}
+set.seed(49)
+
+simulatePitches = function(pitches, runs=1000){
+  pitches %>%
+    filter(!is.na(batted_ball_velocity)) %>%
+    select(batted_ball_velocity) ->
+    draws
+  results = list()
+  for(i in 1:runs){
+    draws %>%
+      sample_frac(replace=TRUE) %>%
+      summarise(average_velocity = mean(batted_ball_velocity)) ->
+      results[[i]]
+  }
+  results %>%
+    bind_rows %>%
+    return
+}
+
+# Run the simulation
+pitch_data %>%
+  group_by(player) %>%
+  do(simulatePitches(.)) %>%
+  ungroup ->
+  pitches_simulated
+head(pitches_simulated)
+```
+
+Now that we have some data on simulated pitches, let's take a look!
+
+```{r}
+pitches_simulated %>%
+  ggplot(aes(x=average_velocity)) +
+  geom_density(aes(fill=player, alpha=.3))
+```
+
+So, how do we know if they're significantly different?
+
+The means for greinke and arrieta are certainly different - greinke is at ~88, whereas arrieta is at ~85.
+
+```{r}
+pitches_simulated %>%
+  group_by(player) %>%
+  summarise(velocity = mean(average_velocity))
+```
+
+We can also run a t-test
+
+```{r}
+v1 = pitches_simulated %>% filter(player=="arrieta") 
+v2 = pitches_simulated %>% filter(player=="greinke")
+
+# Run the test
+t.test(v1$average_velocity, v2$average_velocity) ->
+  t_arrieta_greinke
+t_arrieta_greinke
+```
+
+We see there's a **very** low chance (p ~= `r t_arrieta_greinke$p.value`) that these came from the same underlying distribution. So: Greinke gets hit "harder" than the other two players, for whatever reason - perhaps his pitches are easier to hit head on.
+
+#### What is the relationship between batted ball velocity and batting average against these three?
+
+To replicate - count the number of non-null balls hit back.
+
+```{r}
+pitch_data %>%
+  filter(!is.na(batted_ball_velocity)) %>%
+  group_by(player) %>%
+  summarise(`# of pitches batted` = n())
+```
+
+#### How difficult is each of their particular pitches to hit?
+
+```{r}
+pitch_data %>%
+  group_by(player, pitch_type) %>%
+  summarise(total = n()) %>%
+  ungroup() %>%
+  spread(player, total)
+```
+
+# Historical Cy Young Results
+
+Now let's take a look at some historical results.
+
+```{r warning=FALSE}
+# Load data file and convert share % to a number.
+read_csv("data/cyyoung/results.csv") %>%
+  mutate(share = as.numeric(gsub("%", "", share)) / 100) ->
+  results
+```
+
+
+```{r}
+results %>%
+  group_by(year, league) %>%
+  # Note that we're using dense_rank here, which does *not* allow for gaps, but *does* allow for ties.
+  # This gives different results than the Python code.
+  # We could replicate with row_number() to an extent, but we'd need to order by a third column to get consistent results,
+  # In the situation of ties.
+  mutate(era_rank = dense_rank(desc(earned_run_avg)),
+         wins_rank = dense_rank(desc(W)),
+         # Add "winner" flag
+         winner = ifelse(rank == 1, 1, 0)
+         ) %>%
+  ungroup ->
+  results
+```
+
+Note that, since the way we're calculating rank is different, we get different results from the iPython notebook - 
+
+```{r CalculateWinsRank_Winner}
+
+results %>% 
+  group_by(wins_rank) %>% 
+  summarise(sum(winner))
+
+```
+
+
+```{r Rankings}
+
+results %>%
+  group_by(wins_rank, era_rank) %>%
+  summarise(total=sum(winner)) %>%
+  ungroup %>%
+  spread(era_rank, total)
+
+```
