@@ -134,7 +134,7 @@ Since we've calculated all of out statistics (and there are a lot of them!) let'
 data %>%
   ggplot(aes(x=Date, y=`GB%`, group=player)) +
   geom_line(aes(colour=player), size=2) +
-  ggtitle("Games Behind Percentage")
+  ggtitle("Ground Ball Percentage")
 ```
 
 ![](Arrieta_for_Cy_Young_files/figure-html/Initial_Comparison-1.png) 
